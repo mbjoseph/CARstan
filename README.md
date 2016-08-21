@@ -54,7 +54,7 @@ Previous implementations in Stan have benefitted from sparse representations to 
 
 Jin, Carlin, and Banerjee (2005) present a clever and efficient way to compute the determinant term that does not rely on any approximations:
 
-$$\text{det}(D - \rho A) \propto \prod_{i = 1}^n (1 - \rho \lambda_i)$$
+$$\text{det}(D - \rho W) \propto \prod_{i = 1}^n (1 - \rho \lambda_i)$$
 
 where $\lambda_1, ..., \lambda_n$ are the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$, which can be computed ahead of time and passed in as data. 
 Because we only need the log posterior up to an additive constant, we can use this result which is proportional up to some multiplicative constant $c$: 
@@ -129,13 +129,13 @@ print(full_fit, pars = c('beta', 'tau', 'rho', 'lp__'))
 ## post-warmup draws per chain=4500, total post-warmup draws=18000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]   0.01    0.01 0.27  -0.51  -0.16   0.00   0.17   0.61   453 1.01
-## beta[2]   0.28    0.00 0.09   0.10   0.22   0.28   0.34   0.45  4803 1.00
-## tau       2.08    0.01 0.75   0.98   1.55   1.96   2.48   3.88  4393 1.00
-## rho       0.95    0.00 0.05   0.81   0.93   0.96   0.98   1.00  3632 1.00
-## lp__    826.68    0.12 7.27 811.73 821.89 826.92 831.73 840.05  3834 1.00
+## beta[1]   0.01    0.02 0.32  -0.62  -0.18   0.00   0.17   0.78   216 1.01
+## beta[2]   0.28    0.00 0.09   0.10   0.22   0.28   0.34   0.45  4129 1.00
+## tau       2.09    0.01 0.77   0.97   1.55   1.96   2.49   3.94  3945 1.00
+## rho       0.95    0.00 0.05   0.81   0.93   0.96   0.98   1.00  2042 1.00
+## lp__    826.36    0.15 7.40 810.89 821.63 826.62 831.53 839.99  2378 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Sun Aug 21 10:10:08 2016.
+## Samples were drawn using NUTS(diag_e) at Sun Aug 21 10:41:24 2016.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -184,13 +184,13 @@ print(sp_fit, pars = c('beta', 'tau', 'rho', 'lp__'))
 ## post-warmup draws per chain=4500, total post-warmup draws=18000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]   0.01    0.02 0.28  -0.52  -0.15   0.00   0.16   0.62   291 1.01
-## beta[2]   0.28    0.00 0.09   0.10   0.22   0.28   0.34   0.45  4545 1.00
-## tau       2.10    0.01 0.75   0.99   1.56   1.98   2.49   3.93  4295 1.00
-## rho       0.95    0.00 0.05   0.81   0.93   0.96   0.98   1.00  3027 1.00
-## lp__    788.86    0.13 7.28 773.74 784.25 789.18 793.90 802.32  3313 1.00
+## beta[1]  -0.02    0.01 0.26  -0.58  -0.16  -0.01   0.14   0.48   335 1.01
+## beta[2]   0.28    0.00 0.09   0.10   0.22   0.28   0.34   0.45  4258 1.00
+## tau       2.12    0.01 0.77   0.98   1.57   1.99   2.53   3.96  4424 1.00
+## rho       0.95    0.00 0.05   0.80   0.93   0.96   0.98   1.00  4001 1.00
+## lp__    788.93    0.12 7.24 773.91 784.27 789.17 793.93 802.29  3704 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Sun Aug 21 10:10:25 2016.
+## Samples were drawn using NUTS(diag_e) at Sun Aug 21 10:41:40 2016.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -210,8 +210,8 @@ Sparsity gives us an order of magnitude or so gains, mostly via reductions in ru
 
 Model     Number of effective samples   Elapsed time (sec)   Effective samples / sec)
 -------  ----------------------------  -------------------  -------------------------
-full                         3833.630             408.3990                   9.386971
-sparse                       3312.821              27.9727                 118.430497
+full                         2377.547            407.95057                   5.828026
+sparse                       3703.699             27.89633                 132.766565
 
 ### Posterior distribution comparison
 

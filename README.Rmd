@@ -2,10 +2,7 @@
 title: "Exact sparse CAR models in Stan"
 author: "Max Joseph"
 date: "August 20, 2016"
-output:
-  html_document:
-    keep_md: yes
-  pdf_document: default
+output: pdf_document
 ---
 
 ## About 
@@ -60,7 +57,7 @@ Previous implementations in Stan have benefitted from sparse representations to 
 
 Jin, Carlin, and Banerjee (2005) present a clever and efficient way to compute the determinant term that does not rely on any approximations:
 
-$$\text{det}(D - \rho A) \propto \prod_{i = 1}^n (1 - \rho \lambda_i)$$
+$$\text{det}(D - \rho W) \propto \prod_{i = 1}^n (1 - \rho \lambda_i)$$
 
 where $\lambda_1, ..., \lambda_n$ are the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$, which can be computed ahead of time and passed in as data. 
 Because we only need the log posterior up to an additive constant, we can use this result which is proportional up to some multiplicative constant $c$: 
