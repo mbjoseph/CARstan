@@ -1,0 +1,282 @@
+---
+title: "Exact sparse CAR models in Stan"
+author: "Max Joseph"
+date: "August 20, 2016"
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+---
+
+## About 
+
+This document details sparse exact conditional autoregressive (CAR) models in Stan as an extension of previous work on approximate sparse CAR models in Stan. 
+Sparse representations seem to give order of magnitude efficiency gains, scaling better for large spatial data sets. 
+
+## Background
+
+Conditional autoregressive (CAR) models are popular as prior distributions for spatial random effects with areal spatial data. 
+For instance if we have a Poisson likelihood with spatial random effects: 
+
+$$y_i \sim \text{Poisson}(\text{exp}(X_{i}^T \beta + \phi_i + \log(\text{offset}_i)))$$
+
+where $X$ is a design matrix, $\beta$ is a vector of coefficients, and $\phi_i$ is a spatial adjustment  for locations $i=1, ..., n$. 
+In a CAR model, the conditional distribution of the spatial random effect $\phi_i$ is univariate normal with an expected value that is a function of the spatial adjustments of the other locations:
+
+$$\phi_i \mid \phi_j, j \neq i \sim \text{N}(\rho \sum_j b_{ij} \phi_j, \tau_i^2)$$
+
+Here $\rho$ is a parameter that ensures propriety of the joint distrbution of $\phi$ (Gelfand & Vounatsou 2003).
+The joint distribution of the vector of spatial random effects is multivariate normal: 
+
+$$ \phi \sim \text{N}(0, [D_\tau (I - \rho B)]^{-1})$$
+
+where $D_\tau = \text{diag}(\tau_i)$, and $\tau_i$ is a precision parameter. 
+If the precision is constant spatially, then $\tau$ is a scalar and $D_\tau = \tau D$ where $D = \text{diag}(m_i)$ and $m_i$ is the number of spatial neighbors for location $i$. 
+$I$ is an $n \times n$ identity matrix, and $B = D^{-1} W$ where $W$ is the map adjacency matrix ($w_{ii} = 0, w_{ij} = 1$ if $i$ is a neighbor of $j$, and $w_{ij}=0$ otherwise).
+In most applications, $W$ tends to be sparse.
+
+When $\tau$ is a scalar, this multivariate normal prior can be rewritten as: 
+
+$$ \phi \sim \text{N}(0, [\tau (D - \rho W)]^{-1})$$
+
+where $\tau (D - \rho W)$ is the precision matrix $\Sigma^{-1}$.
+
+such that the log probability of $\phi$ is: 
+
+$$\log(p(\phi \mid \tau, \rho)) = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\text{det}( \Sigma^{-1})) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+We only need the log posterior up to an additive constant so we can drop the first term. 
+Then, we'll substitute in $\tau (D - \rho W)$:
+
+$$\frac{1}{2} \log(\text{det}(\tau (D - \rho W))) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+$$ = \frac{1}{2} \log(\tau ^ n \text{det}(D - \rho W)) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+$$ = \frac{n}{2} \log(\tau) + \frac{1}{2} \log(\text{det}(D - \rho W)) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+## Fast exact determinant calculations
+
+Previous implementations in Stan have benefitted from sparse representations to expedite computation of $\phi^T \Sigma^{-1} \phi$, and have also used approximations to avoid explicit computation of the determinant, e.g., this implementation from Kyle Foreman: https://groups.google.com/d/topic/stan-users/M7T7EIlyhoo/discussion
+
+Jin, Carlin, and Banerjee (2005) present a clever and efficient way to compute the determinant term that does not rely on any approximations:
+
+$$\text{det}(D - \rho A) \propto \prod_{i = 1}^n (1 - \rho \lambda_i)$$
+
+where $\lambda_1, ..., \lambda_n$ are the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$, which can be computed ahead of time and passed in as data. 
+Because we only need the log posterior up to an additive constant, we can use this result which is proportional up to some multiplicative constant $c$: 
+
+$$\frac{n}{2} \log(\tau) + \frac{1}{2} \log(c \prod_{i = 1}^n (1 - \rho \lambda_i)) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+$$= \frac{n}{2} \log(\tau) + \frac{1}{2} \log(c) +  \frac{1}{2} \log(\prod_{i = 1}^n (1 - \rho \lambda_i)) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+Again dropping additive constants: 
+
+$$\frac{n}{2} \log(\tau) + \frac{1}{2} \log(\prod_{i = 1}^n (1 - \rho \lambda_i)) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+$$= \frac{n}{2} \log(\tau) + \frac{1}{2} \sum_{i = 1}^n \log(1 - \rho \lambda_i) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
+
+The determinant term can be computed efficiently in Stan using the `log1m` function.
+The Stan implementation below is a direct extension of Kyle Foreman's sparse approximation (linked above), with two exceptions: 
+
+1. determinant approximations are replaced with exact calculations
+2. the spatial random effects are not artificially centered (this is a proper CAR model rather than an intrinsic autoregressive model - brute force centering is not necessary)
+
+## Example: Scottish lip cancer data
+
+To demonstrate this approach we'll use the Scottish lip cancer data example (some documentation [here](https://cran.r-project.org/web/packages/CARBayesdata/CARBayesdata.pdf)).
+
+```{r, echo = FALSE, message = FALSE}
+library(shapefiles)
+library(CARBayesdata)
+library(CARBayes)
+library(spdep)
+library(maptools)
+library(dplyr)
+library(ggplot2)
+
+data(lipdbf)
+data(lipshp)
+data(lipdata)
+
+lipdbf$dbf <- lipdbf$dbf[ ,c(2,1)]
+scotlips <- combine.data.shapefile(lipdata, lipshp, lipdbf)
+scotlips@data$id <- rownames(scotlips@data)
+scotlips %>%
+  fortify(region = 'id') %>% 
+  full_join(scotlips@data, by = 'id') %>% 
+  ggplot(aes(x = long, y = lat, group = group, fill = observed)) + 
+  geom_polygon() + 
+  coord_equal() + 
+  scale_fill_gradientn('Lip cancer cases', colors = topo.colors(3)) + 
+  theme(axis.line = element_blank(),
+       axis.text.x = element_blank(),
+       axis.text.y = element_blank(),
+       axis.ticks = element_blank(),
+       axis.title.x = element_blank(),
+       axis.title.y = element_blank(),
+       panel.background = element_blank(),
+       panel.border = element_blank(),
+       panel.grid.major = element_blank(),
+       panel.grid.minor = element_blank(),
+       plot.background = element_blank())
+```
+
+
+```{r, message=FALSE}
+library(ggmcmc)
+library(dplyr)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+source('scotland_lip_cancer.RData')
+
+# Define MCMC parameters 
+niter <- 9000   # definitely overkill, but good for comparison
+nchains <- 4
+to_plot <- c('beta', 'tau', 'rho', 'phi[1]', 'phi[2]', 'phi[3]', 'lp__')
+```
+
+
+## Full model 
+
+To fit the full model, we'll pull objects loaded with our Scotland lip cancer data. 
+I'll use `model.matrix` to generate a design matrix, centering and scaling the continuous covariate `x` to reduce correlation between the intercept and slope estimates. 
+
+```{r}
+W <- A # adjacency matrix
+D <- diag(rowSums(A))
+scaled_x <- c(scale(x))
+X <- model.matrix(~scaled_x)
+  
+full_d <- list(n = nrow(X),         # number of observations
+               p = ncol(X),         # number of coefficients
+               X = X,               # design matrix
+               y = O,               # observed number of cases
+               log_offset = log(E), # log(expected) num. cases
+               W = W,               # adjacency matrix
+               D = D)               # diagonal num. neighbor matrix
+
+full_fit <- stan('stan/car_prec.stan', data = full_d, 
+                 iter = niter, chains = nchains, verbose = FALSE)
+print(full_fit, pars = c('beta', 'tau', 'rho', 'lp__'))
+traceplot(full_fit, pars = to_plot)
+```
+
+## Sparse implementation
+
+For the sparse implementation, we first compute $\lambda_1, ..., \lambda_n$ (the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$), then generate a sparse representation for W (`Wsparse`), which is assumed to be symmetric, such that the adjacency relationships can be represented in a two column matrix where each row is an adjacency relationship between two sites. 
+
+```{r}
+# get eigenvalues of D^(-.5) * W * D^(-.5) for determinant computations
+invsqrtD <- diag(1 / sqrt(diag(D)))
+quadformDAD <- invsqrtD %*% W %*% invsqrtD
+lambda <- eigen(quadformDAD)$values
+
+# from Kyle Foreman's script:
+Wsparse <- which(W == 1, arr.ind = TRUE)
+Wsparse <- Wsparse[Wsparse[, 1] < Wsparse[, 2], ]  # removes duplicates
+
+sp_d <- list(n = nrow(X),         # number of observations
+             p = ncol(X),         # number of coefficients
+             X = X,               # design matrix
+             y = O,               # observed number of cases
+             log_offset = log(E), # log(expected) num. cases
+             W_n = nrow(Wsparse), # number of neighbor pairs
+             W1 = Wsparse[, 1],   # column 1 of neighbor pair matrix
+             W2 = Wsparse[, 2],   # column 2 of neighbor pair matrix
+             D_sparse = diag(D),  # number of neighbors for each site
+             lambda = lambda)     # eigenvalues of D^(-.5) * W * D^(-.5)
+
+sp_fit <- stan('stan/car_sparse.stan', data = sp_d, 
+               iter = niter, chains = nchains, verbose = FALSE)
+print(sp_fit, pars = c('beta', 'tau', 'rho', 'lp__'))
+traceplot(sp_fit, pars = to_plot)
+```
+
+### MCMC Efficiency comparison
+ 
+The main quantity of interest is the effective number of samples per unit time. 
+Sparsity gives us an order of magnitude or so gains, mostly via reductions in run time. 
+
+```{r, echo = FALSE}
+library(knitr)
+efficiency <- data.frame(model = c('full', 'sparse'), 
+             n_eff = c(summary(full_fit)$summary['lp__', 'n_eff'], 
+                       summary(sp_fit)$summary['lp__', 'n_eff']), 
+             elapsed_time = c(get_elapsed_time(full_fit) %>% sum(), 
+                              get_elapsed_time(sp_fit) %>% sum())) %>%
+  mutate(n_eff_per_sec = n_eff / elapsed_time)
+names(efficiency) <- c('Model', 'Number of effective samples', 'Elapsed time (sec)', 
+                       'Effective samples / sec)')
+kable(efficiency)
+```
+
+### Posterior distribution comparison
+
+Let's compare the estimates to make sure that we get the same answer with both approaches. 
+In this case, I've used more MCMC iterations than we would typically need in to get a better estimate of the tails of each marginal posterior distribution so that we can compare the 95% credible intervals among the two approaches. 
+
+\newpage
+
+```{r fig.height = 12, echo = FALSE, message = FALSE}
+post_full <- ggs(full_fit)
+post_full$model <- 'full'
+post_sp <- ggs(sp_fit)
+post_sp$model <- 'sparse'
+post <- full_join(post_full, post_sp)
+
+psumm <- post %>%
+  group_by(model, Parameter) %>%
+  summarize(median = median(value), 
+            lo = quantile(value, .025), 
+            hi = quantile(value, .975)) %>%
+  mutate(paramXmod = paste(Parameter, model, sep = '_'))
+
+# compare estimated spatial random effects
+psumm %>%
+  filter(grepl('phi', Parameter)) %>%
+  ggplot(aes(x = median, y = paramXmod, color = model)) + 
+  geom_point() + 
+  geom_segment(aes(x = lo, xend = hi, yend = paramXmod)) + 
+  xlab('Estimate') + 
+  ggtitle('Comparison on random effect estimates')
+```
+
+\newpage
+
+```{r, echo = FALSE, message = FALSE}
+# compare remaining estimates
+psumm %>%
+  filter(!grepl('phi', Parameter)) %>%
+  ggplot(aes(x = median, y = paramXmod, color = model)) + 
+  geom_point() + 
+  geom_segment(aes(x = lo, xend = hi, yend = paramXmod)) + 
+  xlab('Estimate') + 
+  ggtitle(expression(paste('Comparison of parameter estimates excluding'), phi))
+```
+
+The two approaches give the same answers (more or less, with small differences arising due to MCMC sampling error). 
+
+\newpage
+
+### Stan model statement: CAR with `multi_normal_prec`
+
+```{r comment='', echo = FALSE}
+cat(readLines('stan/car_prec.stan'), sep = '\n')
+```
+
+\newpage
+
+### Stan model statement: sparse exact CAR
+
+```{r comment='', echo = FALSE}
+cat(readLines('stan/car_sparse.stan'), sep = '\n')
+```
+
+\newpage
+
+## References
+
+Jin, Xiaoping, Bradley P. Carlin, and Sudipto Banerjee. "Generalized hierarchical multivariate CAR models for areal data." Biometrics 61.4 (2005): 950-961.
+
+Gelfand, Alan E., and Penelope Vounatsou. "Proper multivariate conditional autoregressive models for spatial data analysis." Biostatistics 4.1 (2003): 11-15.
