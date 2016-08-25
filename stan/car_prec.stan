@@ -15,10 +15,10 @@ parameters {
   vector[p] beta;
   vector[n] phi;
   real<lower = 0> tau;
-  real<lower = 0, upper = 1> rho;
+  real<lower = 0, upper = 1> alpha;
 }
 model {
-  phi ~ multi_normal_prec(zeros, tau * (D - rho * W));
+  phi ~ multi_normal_prec(zeros, tau * (D - alpha * W));
   beta ~ normal(0, 1);
   tau ~ gamma(0.5, .0005);
   y ~ poisson_log(X * beta + phi + log_offset);

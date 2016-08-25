@@ -12,29 +12,27 @@ data {
 }
 parameters {
   vector[p] beta;
-  vector[n] phi;
+  vector[n] phi_unscaled;
   real<lower = 0> tau;
-  real<lower = 0, upper = 1> alpha;
+}
+transformed parameters {
+  vector[n] phi; // brute force centering
+  phi = phi_unscaled - mean(phi_unscaled);
 }
 model {
-  row_vector[n] phit_D; // phi' * D
-  row_vector[n] phit_W; // phi' * W
-  vector[n] ldet_terms;
-
-  // From Kyle Foreman:
-  // (phi' * Tau * phi) = tau * ((phi' * D * phi) - alpha * (phi' * W * phi))
-  phit_D = (phi .* D_sparse)';
+  row_vector[n] phit_D;
+  row_vector[n] phit_W;
+  
+  phit_D = (phi_unscaled .* D_sparse)';
   phit_W = rep_row_vector(0, n);
   for (i in 1:W_n) {
-    phit_W[W1[i]] = phit_W[W1[i]] + phi[W2[i]];
-    phit_W[W2[i]] = phit_W[W2[i]] + phi[W1[i]];
+    phit_W[W1[i]] = phit_W[W1[i]] + phi_unscaled[W2[i]];
+    phit_W[W2[i]] = phit_W[W2[i]] + phi_unscaled[W1[i]];
   }
 
-  // prior for phi
-  for (i in 1:n) ldet_terms[i] = log1m(alpha * lambda[i]);
+  // prior for unscaled phi
   target += 0.5 * n * log(tau)
-          + 0.5 * sum(ldet_terms)
-          - 0.5 * tau * (phit_D * phi - alpha * (phit_W * phi)) ;
+          - 0.5 * tau * (phit_D * phi_unscaled - phit_W * phi_unscaled);
   
   beta ~ normal(0, 1);
   tau ~ gamma(0.5, .0005);
