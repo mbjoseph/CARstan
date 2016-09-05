@@ -61,25 +61,22 @@ This data set includes observed lip cancer case counts at 56 spatial units in Sc
 The model structure is identical to the Poisson model outlined above. 
 
 ```{r, echo = FALSE, message = FALSE}
-library(shapefiles)
-library(CARBayesdata)
-library(CARBayes)
 library(spdep)
 library(maptools)
 library(dplyr)
 library(ggplot2)
 
-data(lipdbf)
-data(lipshp)
-data(lipdata)
+proj4str <- "+init=epsg:27700 +proj=tmerc 
+  +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000
+  +datum=OSGB36 +units=m +no_defs +ellps=airy
+  +towgs84=446.448,-125.157,542.060,0.1502,0.2470,0.8421,-20.4894"
 
-lipdbf$dbf <- lipdbf$dbf[ ,c(2,1)]
-scotlips <- combine.data.shapefile(lipdata, lipshp, lipdbf)
+scotlips <- readShapePoly('data/scotland', proj4string = CRS(proj4str))
 scotlips@data$id <- rownames(scotlips@data)
 scotlips %>%
   fortify(region = 'id') %>% 
   full_join(scotlips@data, by = 'id') %>% 
-  ggplot(aes(x = long, y = lat, group = group, fill = observed)) + 
+  ggplot(aes(x = long, y = lat, group = group, fill = Observed)) + 
   geom_polygon() + 
   coord_equal() + 
   scale_fill_gradientn('Lip cancer cases', colors = topo.colors(3)) + 
@@ -104,7 +101,7 @@ library(dplyr)
 library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
-source('scotland_lip_cancer.RData')
+source('data/scotland_lip_cancer.RData')
 
 # Define MCMC parameters 
 niter <- 1E4   # definitely overkill, but good for comparison
@@ -116,7 +113,6 @@ I'll use `model.matrix` to generate a design matrix, centering and scaling the c
 
 ```{r}
 W <- A # adjacency matrix
-D <- diag(rowSums(A))
 scaled_x <- c(scale(x))
 X <- model.matrix(~scaled_x)
   
@@ -125,11 +121,10 @@ full_d <- list(n = nrow(X),         # number of observations
                X = X,               # design matrix
                y = O,               # observed number of cases
                log_offset = log(E), # log(expected) num. cases
-               W = W,               # adjacency matrix
-               D = D)               # diagonal num. neighbor matrix
+               W = W)               # adjacency matrix
 ```
 
-#### Stan model statement: CAR with `multi_normal_prec`
+#### Stan implementation: CAR with `multi_normal_prec`
 
 Our model statement mirrors the structure outlined above, with explicit normal and gamma priors on $\beta$ and $\tau$ respectively, and a $\text{Uniform}(0, 1)$ prior for $\alpha$. 
 The prior on $\phi$ is specified via the `multi_normal_prec` function, passing in $\tau (D - \alpha W)$ as the precision matrix.
@@ -187,34 +182,12 @@ $$\frac{n}{2} \log(\tau) + \frac{1}{2} \log(\prod_{i = 1}^n (1 - \alpha \lambda_
 
 $$= \frac{n}{2} \log(\tau) + \frac{1}{2} \sum_{i = 1}^n \log(1 - \alpha \lambda_i) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
 
-Below, we first compute $\lambda_1, ..., \lambda_n$ (the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$), then generate a sparse representation for W (`Wsparse`), which is assumed to be symmetric, such that the adjacency relationships can be represented in a two column matrix where each row is an adjacency relationship between two sites. 
+### Stan implementation: sparse CAR
 
-```{r}
-# get eigenvalues of D^(-.5) * W * D^(-.5) for determinant computations
-invsqrtD <- diag(1 / sqrt(diag(D)))
-quadformDAD <- invsqrtD %*% W %*% invsqrtD
-lambda <- eigen(quadformDAD)$values
-
-# from Kyle Foreman:
-Wsparse <- which(W == 1, arr.ind = TRUE)
-Wsparse <- Wsparse[Wsparse[, 1] < Wsparse[, 2], ]  # removes duplicates
-
-sp_d <- list(n = nrow(X),         # number of observations
-             p = ncol(X),         # number of coefficients
-             X = X,               # design matrix
-             y = O,               # observed number of cases
-             log_offset = log(E), # log(expected) num. cases
-             W_n = nrow(Wsparse), # number of neighbor pairs
-             W1 = Wsparse[, 1],   # column 1 of neighbor pair matrix
-             W2 = Wsparse[, 2],   # column 2 of neighbor pair matrix
-             D_sparse = diag(D),  # number of neighbors for each site
-             lambda = lambda)     # eigenvalues of D^(-.5) * W * D^(-.5)
-```
-
-### Stan model statement: sparse CAR
+In the Stan model statement's `transformed data` block, we compute $\lambda_1, ..., \lambda_n$ (the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$), and generate a sparse representation for W (`Wsparse`), which is assumed to be symmetric, such that the adjacency relationships can be represented in a two column matrix where each row is an adjacency relationship between two sites. 
 
 The Stan model statement for the sparse implementation never constructs the precision matrix, and does not call any of the `multi_normal*` functions. 
-Instead, we use `target += ...` to add terms to the log probability. 
+Instead, we use define a `sparse_car_lpdf()` function and use it in the model block. 
 
 ```{r comment='', echo = FALSE}
 cat(readLines('stan/car_sparse.stan'), sep = '\n')
@@ -223,8 +196,17 @@ cat(readLines('stan/car_sparse.stan'), sep = '\n')
 Fitting the model:
 
 ```{r}
+sp_d <- list(n = nrow(X),         # number of observations
+             p = ncol(X),         # number of coefficients
+             X = X,               # design matrix
+             y = O,               # observed number of cases
+             log_offset = log(E), # log(expected) num. cases
+             W_n = sum(W) / 2,    # number of neighbor pairs
+             W = W)               # adjacency matrix
+
 sp_fit <- stan('stan/car_sparse.stan', data = sp_d, 
                iter = niter, chains = nchains, verbose = FALSE)
+
 print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 traceplot(sp_fit, pars = to_plot)
 ```

@@ -66,7 +66,7 @@ library(dplyr)
 library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
-source('scotland_lip_cancer.RData')
+source('data/scotland_lip_cancer.RData')
 
 # Define MCMC parameters 
 niter <- 1E4   # definitely overkill, but good for comparison
@@ -79,7 +79,6 @@ I'll use `model.matrix` to generate a design matrix, centering and scaling the c
 
 ```r
 W <- A # adjacency matrix
-D <- diag(rowSums(A))
 scaled_x <- c(scale(x))
 X <- model.matrix(~scaled_x)
   
@@ -88,11 +87,10 @@ full_d <- list(n = nrow(X),         # number of observations
                X = X,               # design matrix
                y = O,               # observed number of cases
                log_offset = log(E), # log(expected) num. cases
-               W = W,               # adjacency matrix
-               D = D)               # diagonal num. neighbor matrix
+               W = W)               # adjacency matrix
 ```
 
-#### Stan model statement: CAR with `multi_normal_prec`
+#### Stan implementation: CAR with `multi_normal_prec`
 
 Our model statement mirrors the structure outlined above, with explicit normal and gamma priors on $\beta$ and $\tau$ respectively, and a $\text{Uniform}(0, 1)$ prior for $\alpha$. 
 The prior on $\phi$ is specified via the `multi_normal_prec` function, passing in $\tau (D - \alpha W)$ as the precision matrix.
@@ -106,10 +104,17 @@ data {
   int<lower = 0> y[n];
   vector[n] log_offset;
   matrix<lower = 0, upper = 1>[n, n] W;
-  matrix<lower = 0>[n, n] D;
 }
 transformed data{
   vector[n] zeros;
+  matrix<lower = 0>[n, n] D;
+  {
+    vector[n] W_rowsums;
+    for (i in 1:n) {
+      W_rowsums[i] = sum(W[i, ]);
+    }
+    D = diag_matrix(W_rowsums);
+  }
   zeros = rep_vector(0, n);
 }
 parameters {
@@ -121,7 +126,7 @@ parameters {
 model {
   phi ~ multi_normal_prec(zeros, tau * (D - alpha * W));
   beta ~ normal(0, 1);
-  tau ~ gamma(0.5, .0005);
+  tau ~ gamma(2, 2);
   y ~ poisson_log(X * beta + phi + log_offset);
 }
 ```
@@ -141,13 +146,13 @@ print(full_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ## post-warmup draws per chain=5000, total post-warmup draws=20000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]   0.00    0.01 0.28  -0.60  -0.15   0.01   0.16   0.53   360    1
-## beta[2]   0.28    0.00 0.09   0.10   0.22   0.28   0.34   0.45  4306    1
-## tau       2.11    0.01 0.78   0.98   1.57   1.99   2.53   3.96  4062    1
-## alpha     0.95    0.00 0.05   0.81   0.93   0.96   0.98   1.00  3573    1
-## lp__    826.72    0.13 7.39 811.39 821.88 827.11 831.79 840.42  3226    1
+## beta[1]   0.00    0.02 0.33  -0.61  -0.16   0.00   0.16   0.71   255 1.02
+## beta[2]   0.27    0.00 0.10   0.08   0.21   0.27   0.33   0.45  4098 1.00
+## tau       1.63    0.01 0.49   0.84   1.27   1.56   1.91   2.77  5523 1.00
+## alpha     0.93    0.00 0.06   0.76   0.91   0.95   0.98   1.00  2563 1.00
+## lp__    820.66    0.11 6.76 806.25 816.28 821.05 825.39 832.84  3589 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Wed Aug 24 23:19:57 2016.
+## Samples were drawn using NUTS(diag_e) at Sun Sep  4 22:55:53 2016.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -198,49 +203,86 @@ $$\frac{n}{2} \log(\tau) + \frac{1}{2} \log(\prod_{i = 1}^n (1 - \alpha \lambda_
 
 $$= \frac{n}{2} \log(\tau) + \frac{1}{2} \sum_{i = 1}^n \log(1 - \alpha \lambda_i) - \frac{1}{2} \phi^T \Sigma^{-1} \phi$$
 
-Below, we first compute $\lambda_1, ..., \lambda_n$ (the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$), then generate a sparse representation for W (`Wsparse`), which is assumed to be symmetric, such that the adjacency relationships can be represented in a two column matrix where each row is an adjacency relationship between two sites. 
+### Stan implementation: sparse CAR
 
-
-```r
-# get eigenvalues of D^(-.5) * W * D^(-.5) for determinant computations
-invsqrtD <- diag(1 / sqrt(diag(D)))
-quadformDAD <- invsqrtD %*% W %*% invsqrtD
-lambda <- eigen(quadformDAD)$values
-
-# from Kyle Foreman:
-Wsparse <- which(W == 1, arr.ind = TRUE)
-Wsparse <- Wsparse[Wsparse[, 1] < Wsparse[, 2], ]  # removes duplicates
-
-sp_d <- list(n = nrow(X),         # number of observations
-             p = ncol(X),         # number of coefficients
-             X = X,               # design matrix
-             y = O,               # observed number of cases
-             log_offset = log(E), # log(expected) num. cases
-             W_n = nrow(Wsparse), # number of neighbor pairs
-             W1 = Wsparse[, 1],   # column 1 of neighbor pair matrix
-             W2 = Wsparse[, 2],   # column 2 of neighbor pair matrix
-             D_sparse = diag(D),  # number of neighbors for each site
-             lambda = lambda)     # eigenvalues of D^(-.5) * W * D^(-.5)
-```
-
-### Stan model statement: sparse CAR
+In the Stan model statement's `transformed data` block, we compute $\lambda_1, ..., \lambda_n$ (the eigenvalues of $D^{-\frac{1}{2}} W D^{-\frac{1}{2}}$), and generate a sparse representation for W (`Wsparse`), which is assumed to be symmetric, such that the adjacency relationships can be represented in a two column matrix where each row is an adjacency relationship between two sites. 
 
 The Stan model statement for the sparse implementation never constructs the precision matrix, and does not call any of the `multi_normal*` functions. 
-Instead, we use `target += ...` to add terms to the log probability. 
+Instead, we use define a `sparse_car_lpdf()` function and use it in the model block. 
 
 
 ```
+functions {
+  /**
+  * Return the log probability of a proper conditional autoregressive (CAR) prior 
+  * with a sparse representation for the adjacency matrix
+  *
+  * @param phi Vector containing the parameters with a CAR prior
+  * @param tau Precision parameter for the CAR prior (real)
+  * @param alpha Dependence (usually spatial) parameter for the CAR prior (real)
+  * @param W_sparse Sparse representation of adjacency matrix (int array)
+  * @param n Length of phi (int)
+  * @param W_n Number of adjacent pairs (int)
+  * @param D_sparse Number of neighbors for each location (vector)
+  * @param lambda Eigenvalues of D^{-1/2}*W*D^{-1/2} (vector)
+  *
+  * @return Log probability density of CAR prior up to additive constant
+  */
+  real sparse_car_lpdf(vector phi, real tau, real alpha, 
+    int[,] W_sparse, vector D_sparse, vector lambda, int n, int W_n) {
+      row_vector[n] phit_D; // phi' * D
+      row_vector[n] phit_W; // phi' * W
+      vector[n] ldet_terms;
+    
+      phit_D = (phi .* D_sparse)';
+      phit_W = rep_row_vector(0, n);
+      for (i in 1:W_n) {
+        phit_W[W_sparse[i, 1]] = phit_W[W_sparse[i, 1]] + phi[W_sparse[i, 2]];
+        phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
+      }
+    
+      for (i in 1:n) ldet_terms[i] = log1m(alpha * lambda[i]);
+      return 0.5 * (n * log(tau)
+                    + sum(ldet_terms)
+                    - tau * (phit_D * phi - alpha * (phit_W * phi)));
+  }
+}
 data {
   int<lower = 1> n;
   int<lower = 1> p;
   matrix[n, p] X;
   int<lower = 0> y[n];
   vector[n] log_offset;
+  matrix<lower = 0, upper = 1>[n, n] W; // adjacency matrix
   int W_n;                // number of adjacent region pairs
-  int W1[W_n];            // first half of adjacency pairs
-  int W2[W_n];            // second half of adjacency pairs
+}
+transformed data {
+  int W_sparse[W_n, 2];   // adjacency pairs
   vector[n] D_sparse;     // diagonal of D (number of neigbors for each site)
   vector[n] lambda;       // eigenvalues of invsqrtD * W * invsqrtD
+  
+  { // generate sparse representation for W
+  int counter;
+  counter = 1;
+  // loop over upper triangular part of W to identify neighbor pairs
+    for (i in 1:(n - 1)) {
+      for (j in (i + 1):n) {
+        if (W[i, j] == 1) {
+          W_sparse[counter, 1] = i;
+          W_sparse[counter, 2] = j;
+          counter = counter + 1;
+        }
+      }
+    }
+  }
+  for (i in 1:n) D_sparse[i] = sum(W[i]);
+  {
+    vector[n] invsqrtD;  
+    for (i in 1:n) {
+      invsqrtD[i] = 1 / sqrt(D_sparse[i]);
+    }
+    lambda = eigenvalues_sym(quad_form(W, diag_matrix(invsqrtD)));
+  }
 }
 parameters {
   vector[p] beta;
@@ -249,27 +291,9 @@ parameters {
   real<lower = 0, upper = 1> alpha;
 }
 model {
-  row_vector[n] phit_D; // phi' * D
-  row_vector[n] phit_W; // phi' * W
-  vector[n] ldet_terms;
-
-  // From Kyle Foreman:
-  // (phi' * Tau * phi) = tau * ((phi' * D * phi) - alpha * (phi' * W * phi))
-  phit_D = (phi .* D_sparse)';
-  phit_W = rep_row_vector(0, n);
-  for (i in 1:W_n) {
-    phit_W[W1[i]] = phit_W[W1[i]] + phi[W2[i]];
-    phit_W[W2[i]] = phit_W[W2[i]] + phi[W1[i]];
-  }
-
-  // prior for phi
-  for (i in 1:n) ldet_terms[i] = log1m(alpha * lambda[i]);
-  target += 0.5 * n * log(tau)
-          + 0.5 * sum(ldet_terms)
-          - 0.5 * tau * (phit_D * phi - alpha * (phit_W * phi)) ;
-  
+  phi ~ sparse_car(tau, alpha, W_sparse, D_sparse, lambda, n, W_n);
   beta ~ normal(0, 1);
-  tau ~ gamma(0.5, .0005);
+  tau ~ gamma(2, 2);
   y ~ poisson_log(X * beta + phi + log_offset);
 }
 ```
@@ -278,8 +302,17 @@ Fitting the model:
 
 
 ```r
+sp_d <- list(n = nrow(X),         # number of observations
+             p = ncol(X),         # number of coefficients
+             X = X,               # design matrix
+             y = O,               # observed number of cases
+             log_offset = log(E), # log(expected) num. cases
+             W_n = sum(W) / 2,    # number of neighbor pairs
+             W = W)               # adjacency matrix
+
 sp_fit <- stan('stan/car_sparse.stan', data = sp_d, 
                iter = niter, chains = nchains, verbose = FALSE)
+
 print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ```
 
@@ -289,13 +322,13 @@ print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ## post-warmup draws per chain=5000, total post-warmup draws=20000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]  -0.02    0.01 0.27  -0.59  -0.17  -0.01   0.14   0.53   480 1.01
-## beta[2]   0.28    0.00 0.09   0.10   0.22   0.28   0.34   0.45  4659 1.00
-## tau       2.09    0.01 0.76   0.96   1.55   1.97   2.50   3.92  5242 1.00
-## alpha     0.95    0.00 0.05   0.80   0.93   0.96   0.98   1.00  3979 1.00
-## lp__    788.63    0.12 7.37 773.25 783.87 788.97 793.81 802.13  4009 1.00
+## beta[1]  -0.02    0.02 0.29  -0.62  -0.17  -0.01   0.14   0.56   340 1.01
+## beta[2]   0.27    0.00 0.10   0.08   0.21   0.28   0.34   0.46  4024 1.00
+## tau       1.63    0.01 0.50   0.84   1.27   1.57   1.92   2.77  6327 1.00
+## alpha     0.93    0.00 0.07   0.76   0.91   0.95   0.97   0.99  2918 1.00
+## lp__    782.80    0.10 6.65 768.82 778.53 783.10 787.40 794.90  4894 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Wed Aug 24 23:20:17 2016.
+## Samples were drawn using NUTS(diag_e) at Sun Sep  4 22:56:12 2016.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -305,7 +338,7 @@ print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 traceplot(sp_fit, pars = to_plot)
 ```
 
-![](README_files/figure-html/unnamed-chunk-8-1.png)<!-- -->
+![](README_files/figure-html/unnamed-chunk-7-1.png)<!-- -->
 
 ### MCMC Efficiency comparison
  
@@ -315,19 +348,19 @@ Sparsity gives us an order of magnitude or so gains, mostly via reductions in ru
 
 Model     Number of effective samples   Elapsed time (sec)   Effective samples / sec)
 -------  ----------------------------  -------------------  -------------------------
-full                         3226.122             450.2175                   7.165695
-sparse                       4008.771              33.4624                 119.799293
+full                         3588.896            460.45975                   7.794159
+sparse                       4893.738             40.44543                 120.996046
 
 ### Posterior distribution comparison
 
 Let's compare the estimates to make sure that we get the same answer with both approaches. 
 In this case, I've used more MCMC iterations than we would typically need in to get a better estimate of the tails of each marginal posterior distribution so that we can compare the 95% credible intervals among the two approaches. 
 
+![](README_files/figure-html/unnamed-chunk-9-1.png)<!-- -->
+
+
+
 ![](README_files/figure-html/unnamed-chunk-10-1.png)<!-- -->
-
-
-
-![](README_files/figure-html/unnamed-chunk-11-1.png)<!-- -->
 
 The two approaches give the same answers (more or less, with small differences arising due to MCMC sampling error). 
 
@@ -351,17 +384,74 @@ And the corresponding Stan syntax would be:
 
 
 ```
+functions {
+  /**
+  * Return the log probability of a proper intrinsic autoregressive (IAR) prior 
+  * with a sparse representation for the adjacency matrix
+  *
+  * @param phi Vector containing the parameters with a IAR prior
+  * @param tau Precision parameter for the IAR prior (real)
+  * @param W_sparse Sparse representation of adjacency matrix (int array)
+  * @param n Length of phi (int)
+  * @param W_n Number of adjacent pairs (int)
+  * @param D_sparse Number of neighbors for each location (vector)
+  * @param lambda Eigenvalues of D^{-1/2}*W*D^{-1/2} (vector)
+  *
+  * @return Log probability density of IAR prior up to additive constant
+  */
+  real sparse_iar_lpdf(vector phi, real tau,
+    int[,] W_sparse, vector D_sparse, vector lambda, int n, int W_n) {
+      row_vector[n] phit_D; // phi' * D
+      row_vector[n] phit_W; // phi' * W
+      vector[n] ldet_terms;
+    
+      phit_D = (phi .* D_sparse)';
+      phit_W = rep_row_vector(0, n);
+      for (i in 1:W_n) {
+        phit_W[W_sparse[i, 1]] = phit_W[W_sparse[i, 1]] + phi[W_sparse[i, 2]];
+        phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
+      }
+    
+      return 0.5 * (n * log(tau)
+                    - tau * (phit_D * phi - (phit_W * phi)));
+  }
+}
 data {
   int<lower = 1> n;
   int<lower = 1> p;
   matrix[n, p] X;
   int<lower = 0> y[n];
   vector[n] log_offset;
+  matrix<lower = 0, upper = 1>[n, n] W; // adjacency matrix
   int W_n;                // number of adjacent region pairs
-  int W1[W_n];            // first half of adjacency pairs
-  int W2[W_n];            // second half of adjacency pairs
+}
+transformed data {
+  int W_sparse[W_n, 2];   // adjacency pairs
   vector[n] D_sparse;     // diagonal of D (number of neigbors for each site)
   vector[n] lambda;       // eigenvalues of invsqrtD * W * invsqrtD
+  
+  { // generate sparse representation for W
+  int counter;
+  counter = 1;
+  // loop over upper triangular part of W to identify neighbor pairs
+    for (i in 1:(n - 1)) {
+      for (j in (i + 1):n) {
+        if (W[i, j] == 1) {
+          W_sparse[counter, 1] = i;
+          W_sparse[counter, 2] = j;
+          counter = counter + 1;
+        }
+      }
+    }
+  }
+  for (i in 1:n) D_sparse[i] = sum(W[i]);
+  {
+    vector[n] invsqrtD;  
+    for (i in 1:n) {
+      invsqrtD[i] = 1 / sqrt(D_sparse[i]);
+    }
+    lambda = eigenvalues_sym(quad_form(W, diag_matrix(invsqrtD)));
+  }
 }
 parameters {
   vector[p] beta;
@@ -373,22 +463,9 @@ transformed parameters {
   phi = phi_unscaled - mean(phi_unscaled);
 }
 model {
-  row_vector[n] phit_D;
-  row_vector[n] phit_W;
-  
-  phit_D = (phi_unscaled .* D_sparse)';
-  phit_W = rep_row_vector(0, n);
-  for (i in 1:W_n) {
-    phit_W[W1[i]] = phit_W[W1[i]] + phi_unscaled[W2[i]];
-    phit_W[W2[i]] = phit_W[W2[i]] + phi_unscaled[W1[i]];
-  }
-
-  // prior for unscaled phi
-  target += 0.5 * n * log(tau)
-          - 0.5 * tau * (phit_D * phi_unscaled - phit_W * phi_unscaled);
-  
+  phi_unscaled ~ sparse_iar(tau, W_sparse, D_sparse, lambda, n, W_n);
   beta ~ normal(0, 1);
-  tau ~ gamma(0.5, .0005);
+  tau ~ gamma(2, 2);
   y ~ poisson_log(X * beta + phi + log_offset);
 }
 ```

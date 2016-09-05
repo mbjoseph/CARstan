@@ -5,10 +5,17 @@ data {
   int<lower = 0> y[n];
   vector[n] log_offset;
   matrix<lower = 0, upper = 1>[n, n] W;
-  matrix<lower = 0>[n, n] D;
 }
 transformed data{
   vector[n] zeros;
+  matrix<lower = 0>[n, n] D;
+  {
+    vector[n] W_rowsums;
+    for (i in 1:n) {
+      W_rowsums[i] = sum(W[i, ]);
+    }
+    D = diag_matrix(W_rowsums);
+  }
   zeros = rep_vector(0, n);
 }
 parameters {
@@ -20,6 +27,6 @@ parameters {
 model {
   phi ~ multi_normal_prec(zeros, tau * (D - alpha * W));
   beta ~ normal(0, 1);
-  tau ~ gamma(0.5, .0005);
+  tau ~ gamma(2, 2);
   y ~ poisson_log(X * beta + phi + log_offset);
 }
