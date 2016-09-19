@@ -26,7 +26,7 @@ functions {
         phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
       }
     
-      return 0.5 * (n * log(tau)
+      return 0.5 * ((n-1) * log(tau)
                     - tau * (phit_D * phi - (phit_W * phi)));
   }
 }
