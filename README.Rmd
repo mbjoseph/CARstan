@@ -63,6 +63,7 @@ The model structure is identical to the Poisson model outlined above.
 ```{r, echo = FALSE, message = FALSE}
 library(spdep)
 library(maptools)
+ gpclibPermit()
 library(dplyr)
 library(ggplot2)
 
@@ -276,18 +277,22 @@ The two approaches give the same answers (more or less, with small differences a
 ## Postscript: sparse IAR specification
 
 Although the IAR prior for $\phi$ that results from $\alpha = 1$ is improper, it remains popular (Besag, York, and Mollie, 1991). 
-In practice, these models are typically fit with a sum to zero constraint: $\sum_{i = 1}^n \phi_i = 0$.
+In practice, these models are typically fit with a sum to zero constraints: $\sum_{i\text{ in connected coponent}} \phi_i = 0$ for each connected component of the graph. This allows us to interpret both the overall mean and the component-wise means.
+
 With $\alpha$ fixed to one, we have: 
 
-$$\log(p(\phi \mid \tau)) = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\text{det}(\tau (D - W))) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$\log(p(\phi \mid \tau)) = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\text{det}^*(\tau (D - W))) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
-$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^n \text{det}(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^{n-k} \text{det}^*(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
-$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^n) + \frac{1}{2} \log(\text{det}(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^{n-k}) + \frac{1}{2} \log(\text{det}^*(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+
+Here $\text{det}^*(A)$ is the generalized determinant of the square matrix $A$ defined as the product of its non-zero eigenvalues, and $k$ is the number of connected components in the graph. For the Scottish Lip Cancer data, there is only one connected component and $k=1$.  The reason that we need to use the generalized determinant is that the precision matrix is, by definition, singular in intrinsic models as the support of the Gaussian distribution is on a subspace with fewer than $n$ dimensions.  For the classical ICAR(1) model, we know that the directions correpsonding to the zero eigenvalues are exactly the vectors that are constant on each connected component of the graph and hence $k$ is the number of connected components.
+
 
 Dropping additive constants, the quantity to increment becomes: 
 
-$$ \frac{1}{2} \log(\tau^n) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$ \frac{1}{2} \log(\tau^{n-k}) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
 And the corresponding Stan syntax would be:
 

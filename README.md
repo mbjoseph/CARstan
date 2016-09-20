@@ -55,6 +55,16 @@ To demonstrate this approach we'll use the Scottish lip cancer data example (som
 This data set includes observed lip cancer case counts at 56 spatial units in Scotland, with an expected number of cases to be used as an offset, and an area-specific continuous covariate that represents the proportion of the population employed in agriculture, fishing, or forestry.
 The model structure is identical to the Poisson model outlined above. 
 
+
+```
+## Warning in gpclibPermit(): support for gpclib will be withdrawn from
+## maptools at the next major release
+```
+
+```
+## [1] TRUE
+```
+
 ![](README_files/figure-html/unnamed-chunk-1-1.png)<!-- -->
 
 Let's start by loading packages and data, specifying the number of MCMC iterations and chains.
@@ -146,13 +156,13 @@ print(full_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ## post-warmup draws per chain=5000, total post-warmup draws=20000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]   0.00    0.02 0.33  -0.61  -0.16   0.00   0.16   0.71   255 1.02
-## beta[2]   0.27    0.00 0.10   0.08   0.21   0.27   0.33   0.45  4098 1.00
-## tau       1.63    0.01 0.49   0.84   1.27   1.56   1.91   2.77  5523 1.00
-## alpha     0.93    0.00 0.06   0.76   0.91   0.95   0.98   1.00  2563 1.00
-## lp__    820.66    0.11 6.76 806.25 816.28 821.05 825.39 832.84  3589 1.00
+## beta[1]  -0.04    0.02 0.29  -0.69  -0.18  -0.02   0.13   0.46   223 1.02
+## beta[2]   0.27    0.00 0.09   0.08   0.21   0.27   0.33   0.46  3611 1.00
+## tau       1.64    0.01 0.50   0.85   1.28   1.58   1.92   2.80  5656 1.00
+## alpha     0.93    0.00 0.06   0.77   0.91   0.95   0.97   1.00  2233 1.00
+## lp__    820.81    0.10 6.74 806.61 816.44 821.17 825.52 832.94  4373 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Sun Sep  4 22:55:53 2016.
+## Samples were drawn using NUTS(diag_e) at Mon Sep 19 21:20:06 2016.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -322,13 +332,13 @@ print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ## post-warmup draws per chain=5000, total post-warmup draws=20000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]  -0.02    0.02 0.29  -0.62  -0.17  -0.01   0.14   0.56   340 1.01
-## beta[2]   0.27    0.00 0.10   0.08   0.21   0.28   0.34   0.46  4024 1.00
-## tau       1.63    0.01 0.50   0.84   1.27   1.57   1.92   2.77  6327 1.00
-## alpha     0.93    0.00 0.07   0.76   0.91   0.95   0.97   0.99  2918 1.00
-## lp__    782.80    0.10 6.65 768.82 778.53 783.10 787.40 794.90  4894 1.00
+## beta[1]   0.00    0.01 0.27  -0.52  -0.16   0.00   0.16   0.55   396 1.01
+## beta[2]   0.27    0.00 0.09   0.08   0.21   0.27   0.34   0.46  4342 1.00
+## tau       1.63    0.01 0.49   0.86   1.28   1.57   1.92   2.77  6771 1.00
+## alpha     0.93    0.00 0.06   0.76   0.91   0.95   0.97   0.99  4457 1.00
+## lp__    782.91    0.09 6.71 768.87 778.55 783.27 787.63 794.93  5210 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Sun Sep  4 22:56:12 2016.
+## Samples were drawn using NUTS(diag_e) at Mon Sep 19 21:20:24 2016.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -348,8 +358,8 @@ Sparsity gives us an order of magnitude or so gains, mostly via reductions in ru
 
 Model     Number of effective samples   Elapsed time (sec)   Effective samples / sec)
 -------  ----------------------------  -------------------  -------------------------
-full                         3588.896            460.45975                   7.794159
-sparse                       4893.738             40.44543                 120.996046
+full                         4372.790            327.32568                   13.35914
+sparse                       5210.235             24.91367                  209.13157
 
 ### Posterior distribution comparison
 
@@ -367,18 +377,22 @@ The two approaches give the same answers (more or less, with small differences a
 ## Postscript: sparse IAR specification
 
 Although the IAR prior for $\phi$ that results from $\alpha = 1$ is improper, it remains popular (Besag, York, and Mollie, 1991). 
-In practice, these models are typically fit with a sum to zero constraint: $\sum_{i = 1}^n \phi_i = 0$.
+In practice, these models are typically fit with a sum to zero constraints: $\sum_{i\text{ in connected coponent}} \phi_i = 0$ for each connected component of the graph. This allows us to interpret both the overall mean and the component-wise means.
+
 With $\alpha$ fixed to one, we have: 
 
-$$\log(p(\phi \mid \tau)) = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\text{det}(\tau (D - W))) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$\log(p(\phi \mid \tau)) = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\text{det}^*(\tau (D - W))) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
-$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^n \text{det}(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^{n-k} \text{det}^*(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
-$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^n) + \frac{1}{2} \log(\text{det}(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$ = - \frac{n}{2} \log(2 \pi) + \frac{1}{2} \log(\tau^{n-k}) + \frac{1}{2} \log(\text{det}^*(D - W)) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+
+Here $\text{det}^*(A)$ is the generalized determinant of the square matrix $A$ defined as the product of its non-zero eigenvalues, and $k$ is the number of connected components in the graph. For the Scottish Lip Cancer data, there is only one connected component and $k=1$.  The reason that we need to use the generalized determinant is that the precision matrix is, by definition, singular in intrinsic models as the support of the Gaussian distribution is on a subspace with fewer than $n$ dimensions.  For the classical ICAR(1) model, we know that the directions correpsonding to the zero eigenvalues are exactly the vectors that are constant on each connected component of the graph and hence $k$ is the number of connected components.
+
 
 Dropping additive constants, the quantity to increment becomes: 
 
-$$ \frac{1}{2} \log(\tau^n) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
+$$ \frac{1}{2} \log(\tau^{n-k}) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
 And the corresponding Stan syntax would be:
 
@@ -412,7 +426,7 @@ functions {
         phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
       }
     
-      return 0.5 * (n * log(tau)
+      return 0.5 * ((n-1) * log(tau)
                     - tau * (phit_D * phi - (phit_W * phi)));
   }
 }
