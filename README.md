@@ -65,14 +65,13 @@ The model structure is identical to the Poisson model outlined above.
 ## [1] TRUE
 ```
 
-![](README_files/figure-html/unnamed-chunk-1-1.png)<!-- -->
+![](README_files/figure-html/make-scotland-map-1.png)<!-- -->
 
 Let's start by loading packages and data, specifying the number of MCMC iterations and chains.
 
 
 ```r
 library(ggmcmc)
-library(dplyr)
 library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
@@ -156,13 +155,13 @@ print(full_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ## post-warmup draws per chain=5000, total post-warmup draws=20000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]  -0.04    0.02 0.29  -0.69  -0.18  -0.02   0.13   0.46   223 1.02
-## beta[2]   0.27    0.00 0.09   0.08   0.21   0.27   0.33   0.46  3611 1.00
-## tau       1.64    0.01 0.50   0.85   1.28   1.58   1.92   2.80  5656 1.00
-## alpha     0.93    0.00 0.06   0.77   0.91   0.95   0.97   1.00  2233 1.00
-## lp__    820.81    0.10 6.74 806.61 816.44 821.17 825.52 832.94  4373 1.00
+## beta[1]   0.02    0.02 0.29  -0.52  -0.15   0.00   0.16   0.69   321 1.01
+## beta[2]   0.27    0.00 0.09   0.08   0.21   0.27   0.34   0.45  3981 1.00
+## tau       1.65    0.01 0.50   0.85   1.29   1.59   1.93   2.83  6218 1.00
+## alpha     0.93    0.00 0.06   0.77   0.91   0.95   0.98   1.00  3804 1.00
+## lp__    820.81    0.10 6.73 806.63 816.45 821.18 825.52 832.99  4485 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Mon Sep 19 21:20:06 2016.
+## Samples were drawn using NUTS(diag_e) at Thu Feb  9 18:25:48 2017.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -174,7 +173,7 @@ to_plot <- c('beta', 'tau', 'alpha', 'phi[1]', 'phi[2]', 'phi[3]', 'lp__')
 traceplot(full_fit, pars = to_plot)
 ```
 
-![](README_files/figure-html/unnamed-chunk-5-1.png)<!-- -->
+![](README_files/figure-html/fit-prec-model-1.png)<!-- -->
 
 ### A more efficient sparse representation
 
@@ -332,13 +331,13 @@ print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 ## post-warmup draws per chain=5000, total post-warmup draws=20000.
 ## 
 ##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]   0.00    0.01 0.27  -0.52  -0.16   0.00   0.16   0.55   396 1.01
-## beta[2]   0.27    0.00 0.09   0.08   0.21   0.27   0.34   0.46  4342 1.00
-## tau       1.63    0.01 0.49   0.86   1.28   1.57   1.92   2.77  6771 1.00
-## alpha     0.93    0.00 0.06   0.76   0.91   0.95   0.97   0.99  4457 1.00
-## lp__    782.91    0.09 6.71 768.87 778.55 783.27 787.63 794.93  5210 1.00
+## beta[1]  -0.01    0.02 0.29  -0.63  -0.15   0.00   0.15   0.57   140 1.03
+## beta[2]   0.27    0.00 0.09   0.09   0.21   0.27   0.34   0.46  4449 1.00
+## tau       1.64    0.01 0.50   0.86   1.29   1.58   1.94   2.79  5808 1.00
+## alpha     0.93    0.00 0.06   0.76   0.91   0.95   0.97   0.99  3169 1.00
+## lp__    782.96    0.10 6.83 768.65 778.50 783.31 787.71 795.26  4418 1.00
 ## 
-## Samples were drawn using NUTS(diag_e) at Mon Sep 19 21:20:24 2016.
+## Samples were drawn using NUTS(diag_e) at Thu Feb  9 18:26:06 2017.
 ## For each parameter, n_eff is a crude measure of effective sample size,
 ## and Rhat is the potential scale reduction factor on split chains (at 
 ## convergence, Rhat=1).
@@ -348,7 +347,7 @@ print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
 traceplot(sp_fit, pars = to_plot)
 ```
 
-![](README_files/figure-html/unnamed-chunk-7-1.png)<!-- -->
+![](README_files/figure-html/fit-sparse-model-1.png)<!-- -->
 
 ### MCMC Efficiency comparison
  
@@ -358,19 +357,19 @@ Sparsity gives us an order of magnitude or so gains, mostly via reductions in ru
 
 Model     Number of effective samples   Elapsed time (sec)   Effective samples / sec)
 -------  ----------------------------  -------------------  -------------------------
-full                         4372.790            327.32568                   13.35914
-sparse                       5210.235             24.91367                  209.13157
+full                         4485.084            488.56955                   9.180032
+sparse                       4418.415             38.52712                 114.683248
 
 ### Posterior distribution comparison
 
 Let's compare the estimates to make sure that we get the same answer with both approaches. 
 In this case, I've used more MCMC iterations than we would typically need in to get a better estimate of the tails of each marginal posterior distribution so that we can compare the 95% credible intervals among the two approaches. 
 
-![](README_files/figure-html/unnamed-chunk-9-1.png)<!-- -->
+![](README_files/figure-html/compare-parameter-estimates-1.png)<!-- -->
 
 
 
-![](README_files/figure-html/unnamed-chunk-10-1.png)<!-- -->
+![](README_files/figure-html/unnamed-chunk-1-1.png)<!-- -->
 
 The two approaches give the same answers (more or less, with small differences arising due to MCMC sampling error). 
 

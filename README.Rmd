@@ -60,7 +60,7 @@ To demonstrate this approach we'll use the Scottish lip cancer data example (som
 This data set includes observed lip cancer case counts at 56 spatial units in Scotland, with an expected number of cases to be used as an offset, and an area-specific continuous covariate that represents the proportion of the population employed in agriculture, fishing, or forestry.
 The model structure is identical to the Poisson model outlined above. 
 
-```{r, echo = FALSE, message = FALSE}
+```{r make-scotland-map, echo = FALSE, message = FALSE}
 library(spdep)
 library(maptools)
  gpclibPermit()
@@ -96,9 +96,8 @@ scotlips %>%
 
 Let's start by loading packages and data, specifying the number of MCMC iterations and chains.
 
-```{r, message=FALSE}
+```{r load-lip-cancer-data, message=FALSE}
 library(ggmcmc)
-library(dplyr)
 library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
@@ -112,7 +111,7 @@ nchains <- 4
 To fit the full model, we'll pull objects loaded with our Scotland lip cancer data. 
 I'll use `model.matrix` to generate a design matrix, centering and scaling the continuous covariate `x` to reduce correlation between the intercept and slope estimates. 
 
-```{r}
+```{r make-adjacency-matrix}
 W <- A # adjacency matrix
 scaled_x <- c(scale(x))
 X <- model.matrix(~scaled_x)
@@ -130,13 +129,13 @@ full_d <- list(n = nrow(X),         # number of observations
 Our model statement mirrors the structure outlined above, with explicit normal and gamma priors on $\beta$ and $\tau$ respectively, and a $\text{Uniform}(0, 1)$ prior for $\alpha$. 
 The prior on $\phi$ is specified via the `multi_normal_prec` function, passing in $\tau (D - \alpha W)$ as the precision matrix.
 
-```{r comment='', echo = FALSE}
+```{r print-stan-prec-model, comment='', echo = FALSE}
 cat(readLines('stan/car_prec.stan'), sep = '\n')
 ```
 
 Fitting the model with `rstan`:
 
-```{r}
+```{r fit-prec-model}
 full_fit <- stan('stan/car_prec.stan', data = full_d, 
                  iter = niter, chains = nchains, verbose = FALSE)
 print(full_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
@@ -190,13 +189,13 @@ In the Stan model statement's `transformed data` block, we compute $\lambda_1, .
 The Stan model statement for the sparse implementation never constructs the precision matrix, and does not call any of the `multi_normal*` functions. 
 Instead, we use define a `sparse_car_lpdf()` function and use it in the model block. 
 
-```{r comment='', echo = FALSE}
+```{r print-sparse-model, comment='', echo = FALSE}
 cat(readLines('stan/car_sparse.stan'), sep = '\n')
 ```
 
 Fitting the model:
 
-```{r}
+```{r fit-sparse-model}
 sp_d <- list(n = nrow(X),         # number of observations
              p = ncol(X),         # number of coefficients
              X = X,               # design matrix
@@ -217,7 +216,7 @@ traceplot(sp_fit, pars = to_plot)
 The main quantity of interest is the effective number of samples per unit time. 
 Sparsity gives us an order of magnitude or so gains, mostly via reductions in run time. 
 
-```{r, echo = FALSE}
+```{r make-mcmc-efficiency-table, echo = FALSE}
 library(knitr)
 efficiency <- data.frame(model = c('full', 'sparse'), 
              n_eff = c(summary(full_fit)$summary['lp__', 'n_eff'], 
@@ -235,7 +234,7 @@ kable(efficiency)
 Let's compare the estimates to make sure that we get the same answer with both approaches. 
 In this case, I've used more MCMC iterations than we would typically need in to get a better estimate of the tails of each marginal posterior distribution so that we can compare the 95% credible intervals among the two approaches. 
 
-```{r fig.height = 12, echo = FALSE, message = FALSE}
+```{r compare-parameter-estimates, fig.height = 12, echo = FALSE, message = FALSE}
 post_full <- ggs(full_fit)
 post_full$model <- 'full'
 post_sp <- ggs(sp_fit)
@@ -296,7 +295,7 @@ $$ \frac{1}{2} \log(\tau^{n-k}) - \frac{1}{2} \phi^T \tau (D - W) \phi$$
 
 And the corresponding Stan syntax would be:
 
-```{r comment='', echo = FALSE}
+```{r print-iar-model, comment='', echo = FALSE}
 cat(readLines('stan/iar_sparse.stan'), sep = '\n')
 ```
 
