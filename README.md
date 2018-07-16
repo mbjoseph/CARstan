@@ -1,4 +1,10 @@
 # Exact sparse CAR models in Stan
+
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.210407.svg)](https://doi.org/10.5281/zenodo.210407)
+
+
+
 Max Joseph  
 August 20, 2016  
 
