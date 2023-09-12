@@ -61,51 +61,26 @@ This data set includes observed lip cancer case counts at 56 spatial units in Sc
 The model structure is identical to the Poisson model outlined above. 
 
 ```{r make-scotland-map, echo = FALSE, message = FALSE}
-library(spdep)
-library(maptools)
- gpclibPermit()
 library(dplyr)
 library(ggplot2)
+library(sf)
 
-proj4str <- "+init=epsg:27700 +proj=tmerc 
-  +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000
-  +datum=OSGB36 +units=m +no_defs +ellps=airy
-  +towgs84=446.448,-125.157,542.060,0.1502,0.2470,0.8421,-20.4894"
+scotlips <- st_read("/vsicurl/https://github.com/mbjoseph/CARstan/raw/master/data/scotland.shp", crs=27700)
 
-scotlips <- readShapePoly('data/scotland', proj4string = CRS(proj4str))
-scotlips@data$id <- rownames(scotlips@data)
-scotlips %>%
-  fortify(region = 'id') %>% 
-  full_join(scotlips@data, by = 'id') %>% 
-  ggplot(aes(x = long, y = lat, group = group, fill = Observed)) + 
-  geom_polygon() + 
-  coord_equal() + 
-  scale_fill_gradientn('Lip cancer cases', colors = topo.colors(3)) + 
-  theme(axis.line = element_blank(),
-       axis.text.x = element_blank(),
-       axis.text.y = element_blank(),
-       axis.ticks = element_blank(),
-       axis.title.x = element_blank(),
-       axis.title.y = element_blank(),
-       panel.background = element_blank(),
-       panel.border = element_blank(),
-       panel.grid.major = element_blank(),
-       panel.grid.minor = element_blank(),
-       plot.background = element_blank())
+scotlips |>
+  ggplot() + 
+  geom_sf(aes(fill = Observed)) + 
+  scale_fill_gradientn('Lip cancer cases', colors = topo.colors(3))
 ```
 
 Let's start by loading packages and data, specifying the number of MCMC iterations and chains.
 
 ```{r load-lip-cancer-data, message=FALSE}
 library(ggmcmc)
-library(rstan)
-rstan_options(auto_write = TRUE)
-options(mc.cores = parallel::detectCores())
-source('data/scotland_lip_cancer.RData')
-
-# Define MCMC parameters 
-niter <- 1E4   # definitely overkill, but good for comparison
-nchains <- 4
+library(bayesplot)
+library(cmdstanr)
+library(posterior)
+source('https://raw.githubusercontent.com/mbjoseph/CARstan/master/data/scotland_lip_cancer.RData')
 ```
 
 To fit the full model, we'll pull objects loaded with our Scotland lip cancer data. 
@@ -136,13 +111,25 @@ cat(readLines('stan/car_prec.stan'), sep = '\n')
 Fitting the model with `rstan`:
 
 ```{r fit-prec-model}
-full_fit <- stan('stan/car_prec.stan', data = full_d, 
-                 iter = niter, chains = nchains, verbose = FALSE)
-print(full_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
+# Define MCMC parameters 
+niter <- 1E4   # definitely overkill, but good for comparison
+nchains <- 4
+
+mod <- cmdstan_model('stan/car_prec.stan')
+
+full_fit <- mod$sample(
+  data = full_d,
+  parallel_chains = nchains,
+  iter_sampling = niter, 
+  show_messages = FALSE, 
+  show_exceptions = FALSE
+)
+
+print(full_fit$summary(c('beta', 'tau', 'alpha', 'lp__')))
 
 # visualize results 
 to_plot <- c('beta', 'tau', 'alpha', 'phi[1]', 'phi[2]', 'phi[3]', 'lp__')
-traceplot(full_fit, pars = to_plot)
+mcmc_trace(full_fit$draws(to_plot))
 ```
 
 ### A more efficient sparse representation
@@ -204,11 +191,18 @@ sp_d <- list(n = nrow(X),         # number of observations
              W_n = sum(W) / 2,    # number of neighbor pairs
              W = W)               # adjacency matrix
 
-sp_fit <- stan('stan/car_sparse.stan', data = sp_d, 
-               iter = niter, chains = nchains, verbose = FALSE)
+sp_fit <- cmdstan_model('stan/car_sparse.stan')$sample(
+  data = sp_d,
+  parallel_chains = nchains,
+  iter_sampling = niter, 
+  show_messages = FALSE, 
+  show_exceptions = FALSE
+)
 
-print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
-traceplot(sp_fit, pars = to_plot)
+
+print(sp_fit$summary(c('beta', 'tau', 'alpha', 'lp__')))
+
+mcmc_trace(sp_fit$draws(to_plot))
 ```
 
 ### MCMC Efficiency comparison
@@ -218,12 +212,19 @@ Sparsity gives us an order of magnitude or so gains, mostly via reductions in ru
 
 ```{r make-mcmc-efficiency-table, echo = FALSE}
 library(knitr)
-efficiency <- data.frame(model = c('full', 'sparse'), 
-             n_eff = c(summary(full_fit)$summary['lp__', 'n_eff'], 
-                       summary(sp_fit)$summary['lp__', 'n_eff']), 
-             elapsed_time = c(get_elapsed_time(full_fit) %>% sum(), 
-                              get_elapsed_time(sp_fit) %>% sum())) %>%
+efficiency <- data.frame(
+    model = c('full', 'sparse'), 
+     n_eff = c(
+       ess_bulk(full_fit$draws("lp__")), 
+       ess_bulk(sp_fit$draws("lp__"))
+     ),
+    elapsed_time = c(
+      full_fit$time()$total, 
+      sp_fit$time()$total
+    )
+  ) %>%
   mutate(n_eff_per_sec = n_eff / elapsed_time)
+
 names(efficiency) <- c('Model', 'Number of effective samples', 'Elapsed time (sec)', 
                        'Effective samples / sec)')
 kable(efficiency)
@@ -234,46 +235,42 @@ kable(efficiency)
 Let's compare the estimates to make sure that we get the same answer with both approaches. 
 In this case, I've used more MCMC iterations than we would typically need in to get a better estimate of the tails of each marginal posterior distribution so that we can compare the 95% credible intervals among the two approaches. 
 
-```{r compare-parameter-estimates, fig.height = 12, echo = FALSE, message = FALSE}
-post_full <- ggs(full_fit)
+```{r compare-parameter-estimates, echo = FALSE, message = FALSE, warning=FALSE}
+post_full <- full_fit$draws("phi", format = "df")
 post_full$model <- 'full'
-post_sp <- ggs(sp_fit)
+post_sp <- sp_fit$draws("phi", format = "df")
 post_sp$model <- 'sparse'
 post <- full_join(post_full, post_sp)
 
 psumm <- post %>%
-  group_by(model, Parameter) %>%
-  summarize(median = median(value), 
-            lo = quantile(value, .025), 
-            hi = quantile(value, .975)) %>%
-  mutate(paramXmod = paste(Parameter, model, sep = '_'))
+  tidyr::pivot_longer(starts_with("phi")) |>
+  group_by(model, name) %>%
+  summarize(
+    median = median(value), 
+    lo = quantile(value, .025), 
+    hi = quantile(value, .975), 
+    .groups = "drop"
+  ) |>
+  tidyr::pivot_wider(names_from = "model", values_from = c("median", "lo", "hi"))
 
 # compare estimated spatial random effects
 psumm %>%
-  filter(grepl('phi', Parameter)) %>%
-  ggplot(aes(x = median, y = paramXmod, color = model)) + 
+  ggplot(aes(x = median_full, y = median_sparse)) + 
   geom_point() + 
-  geom_segment(aes(x = lo, xend = hi, yend = paramXmod)) + 
-  xlab('Estimate') + 
+  geom_segment(aes(x = lo_full, xend = hi_full, yend = median_sparse)) + 
+  geom_segment(aes(xend = median_full, y = lo_sparse, yend = hi_sparse)) +
+  geom_abline(linetype = "dashed") +
+  xlab('Full CAR spatial effect') +
+  ylab("Sparse CAR spatial effect") + 
   ggtitle('Comparison on random effect estimates')
 ```
 
 
-
-```{r, echo = FALSE, message = FALSE}
-# compare remaining estimates
-psumm %>%
-  filter(!grepl('phi', Parameter)) %>%
-  ggplot(aes(x = median, y = paramXmod, color = model)) + 
-  geom_point() + 
-  geom_segment(aes(x = lo, xend = hi, yend = paramXmod)) + 
-  xlab('Estimate') + 
-  ggtitle(expression(paste('Comparison of parameter estimates excluding'), phi))
-```
-
 The two approaches give the same answers (more or less, with small differences arising due to MCMC sampling error). 
 
 ## Postscript: sparse IAR specification
+
+2023 update: for a much more comprehensive treatment of IAR models, see Morris, Mitzi, Katherine Wheeler-Martin, Dan Simpson, Stephen J. Mooney, Andrew Gelman, and Charles DiMaggio. "Bayesian hierarchical spatial models: Implementing the Besag York Mollié model in stan." Spatial and spatio-temporal epidemiology 31 (2019): 100301. https://doi.org/10.1016/j.sste.2019.100301
 
 Although the IAR prior for $\phi$ that results from $\alpha = 1$ is improper, it remains popular (Besag, York, and Mollie, 1991). 
 In practice, these models are typically fit with a sum to zero constraints: $\sum_{i\text{ in connected coponent}} \phi_i = 0$ for each connected component of the graph. This allows us to interpret both the overall mean and the component-wise means.

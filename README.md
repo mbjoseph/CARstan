@@ -1,12 +1,11 @@
-# Exact sparse CAR models in Stan
-
-
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.210407.svg)](https://doi.org/10.5281/zenodo.210407)
-
-
-
-Max Joseph  
-August 20, 2016  
+---
+title: "Exact sparse CAR models in Stan"
+author: "Max Joseph"
+date: "August 20, 2016"
+output: 
+  html_document:
+    keep_md: true
+---
 
 
 This document details sparse exact conditional autoregressive (CAR) models in Stan as an extension of previous work on approximate sparse CAR models in Stan. 
@@ -63,12 +62,14 @@ The model structure is identical to the Poisson model outlined above.
 
 
 ```
-## Warning in gpclibPermit(): support for gpclib will be withdrawn from
-## maptools at the next major release
-```
-
-```
-## [1] TRUE
+## Reading layer `scotland' from data source 
+##   `/vsicurl/https://github.com/mbjoseph/CARstan/raw/master/data/scotland.shp' 
+##   using driver `ESRI Shapefile'
+## Simple feature collection with 56 features and 9 fields
+## Geometry type: MULTIPOLYGON
+## Dimension:     XY
+## Bounding box:  xmin: 7150.759 ymin: 529557.2 xmax: 468393.4 ymax: 1218479
+## Projected CRS: OSGB36 / British National Grid
 ```
 
 ![](README_files/figure-html/make-scotland-map-1.png)<!-- -->
@@ -78,14 +79,10 @@ Let's start by loading packages and data, specifying the number of MCMC iteratio
 
 ```r
 library(ggmcmc)
-library(rstan)
-rstan_options(auto_write = TRUE)
-options(mc.cores = parallel::detectCores())
-source('data/scotland_lip_cancer.RData')
-
-# Define MCMC parameters 
-niter <- 1E4   # definitely overkill, but good for comparison
-nchains <- 4
+library(bayesplot)
+library(cmdstanr)
+library(posterior)
+source('https://raw.githubusercontent.com/mbjoseph/CARstan/master/data/scotland_lip_cancer.RData')
 ```
 
 To fit the full model, we'll pull objects loaded with our Scotland lip cancer data. 
@@ -113,20 +110,20 @@ The prior on $\phi$ is specified via the `multi_normal_prec` function, passing i
 
 ```
 data {
-  int<lower = 1> n;
-  int<lower = 1> p;
+  int<lower=1> n;
+  int<lower=1> p;
   matrix[n, p] X;
-  int<lower = 0> y[n];
+  array[n] int<lower=0> y;
   vector[n] log_offset;
-  matrix<lower = 0, upper = 1>[n, n] W;
+  matrix<lower=0, upper=1>[n, n] W;
 }
-transformed data{
+transformed data {
   vector[n] zeros;
-  matrix<lower = 0>[n, n] D;
+  matrix<lower=0>[n, n] D;
   {
     vector[n] W_rowsums;
-    for (i in 1:n) {
-      W_rowsums[i] = sum(W[i, ]);
+    for (i in 1 : n) {
+      W_rowsums[i] = sum(W[i,  : ]);
     }
     D = diag_matrix(W_rowsums);
   }
@@ -135,8 +132,8 @@ transformed data{
 parameters {
   vector[p] beta;
   vector[n] phi;
-  real<lower = 0> tau;
-  real<lower = 0, upper = 1> alpha;
+  real<lower=0> tau;
+  real<lower=0, upper=1> alpha;
 }
 model {
   phi ~ multi_normal_prec(zeros, tau * (D - alpha * W));
@@ -150,33 +147,39 @@ Fitting the model with `rstan`:
 
 
 ```r
-full_fit <- stan('stan/car_prec.stan', data = full_d, 
-                 iter = niter, chains = nchains, verbose = FALSE)
-print(full_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
+# Define MCMC parameters 
+niter <- 1E4   # definitely overkill, but good for comparison
+nchains <- 4
+
+mod <- cmdstan_model('stan/car_prec.stan')
+
+full_fit <- mod$sample(
+  data = full_d,
+  parallel_chains = nchains,
+  iter_sampling = niter, 
+  show_messages = FALSE, 
+  show_exceptions = FALSE
+)
+
+print(full_fit$summary(c('beta', 'tau', 'alpha', 'lp__')))
 ```
 
 ```
-## Inference for Stan model: car_prec.
-## 4 chains, each with iter=10000; warmup=5000; thin=1; 
-## post-warmup draws per chain=5000, total post-warmup draws=20000.
-## 
-##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]   0.02    0.02 0.29  -0.52  -0.15   0.00   0.16   0.69   321 1.01
-## beta[2]   0.27    0.00 0.09   0.08   0.21   0.27   0.34   0.45  3981 1.00
-## tau       1.65    0.01 0.50   0.85   1.29   1.59   1.93   2.83  6218 1.00
-## alpha     0.93    0.00 0.06   0.77   0.91   0.95   0.98   1.00  3804 1.00
-## lp__    820.81    0.10 6.73 806.63 816.45 821.18 825.52 832.99  4485 1.00
-## 
-## Samples were drawn using NUTS(diag_e) at Thu Feb  9 18:25:48 2017.
-## For each parameter, n_eff is a crude measure of effective sample size,
-## and Rhat is the potential scale reduction factor on split chains (at 
-## convergence, Rhat=1).
+## # A tibble: 5 × 10
+##   variable     mean   median     sd    mad      q5     q95  rhat ess_bulk
+##   <chr>       <num>    <num>  <num>  <num>   <num>   <num> <num>    <num>
+## 1 beta[1]   -0.0156  -0.0103 0.285  0.232   -0.467   0.422  1.01    1026.
+## 2 beta[2]    0.270    0.271  0.0942 0.0931   0.114   0.423  1.00    7961.
+## 3 tau        1.66     1.59   0.508  0.476    0.950   2.58   1.00    9844.
+## 4 alpha      0.934    0.952  0.0617 0.0409   0.818   0.993  1.00    3813.
+## 5 lp__     821.     821.     6.70   6.68   809.    831.     1.00    8610.
+## # ℹ 1 more variable: ess_tail <num>
 ```
 
 ```r
 # visualize results 
 to_plot <- c('beta', 'tau', 'alpha', 'phi[1]', 'phi[2]', 'phi[3]', 'lp__')
-traceplot(full_fit, pars = to_plot)
+mcmc_trace(full_fit$draws(to_plot))
 ```
 
 ![](README_files/figure-html/fit-prec-model-1.png)<!-- -->
@@ -243,45 +246,49 @@ functions {
   *
   * @return Log probability density of CAR prior up to additive constant
   */
-  real sparse_car_lpdf(vector phi, real tau, real alpha, 
-    int[,] W_sparse, vector D_sparse, vector lambda, int n, int W_n) {
-      row_vector[n] phit_D; // phi' * D
-      row_vector[n] phit_W; // phi' * W
-      vector[n] ldet_terms;
+  real sparse_car_lpdf(vector phi, real tau, real alpha,
+                       array[,] int W_sparse, vector D_sparse, vector lambda,
+                       int n, int W_n) {
+    row_vector[n] phit_D; // phi' * D
+    row_vector[n] phit_W; // phi' * W
+    vector[n] ldet_terms;
     
-      phit_D = (phi .* D_sparse)';
-      phit_W = rep_row_vector(0, n);
-      for (i in 1:W_n) {
-        phit_W[W_sparse[i, 1]] = phit_W[W_sparse[i, 1]] + phi[W_sparse[i, 2]];
-        phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
-      }
+    phit_D = (phi .* D_sparse)';
+    phit_W = rep_row_vector(0, n);
+    for (i in 1 : W_n) {
+      phit_W[W_sparse[i, 1]] = phit_W[W_sparse[i, 1]] + phi[W_sparse[i, 2]];
+      phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
+    }
     
-      for (i in 1:n) ldet_terms[i] = log1m(alpha * lambda[i]);
-      return 0.5 * (n * log(tau)
-                    + sum(ldet_terms)
-                    - tau * (phit_D * phi - alpha * (phit_W * phi)));
+    for (i in 1 : n) {
+      ldet_terms[i] = log1m(alpha * lambda[i]);
+    }
+    return 0.5
+           * (n * log(tau) + sum(ldet_terms)
+              - tau * (phit_D * phi - alpha * (phit_W * phi)));
   }
 }
 data {
-  int<lower = 1> n;
-  int<lower = 1> p;
+  int<lower=1> n;
+  int<lower=1> p;
   matrix[n, p] X;
-  int<lower = 0> y[n];
+  array[n] int<lower=0> y;
   vector[n] log_offset;
-  matrix<lower = 0, upper = 1>[n, n] W; // adjacency matrix
-  int W_n;                // number of adjacent region pairs
+  matrix<lower=0, upper=1>[n, n] W; // adjacency matrix
+  int W_n; // number of adjacent region pairs
 }
 transformed data {
-  int W_sparse[W_n, 2];   // adjacency pairs
-  vector[n] D_sparse;     // diagonal of D (number of neigbors for each site)
-  vector[n] lambda;       // eigenvalues of invsqrtD * W * invsqrtD
+  array[W_n, 2] int W_sparse; // adjacency pairs
+  vector[n] D_sparse; // diagonal of D (number of neigbors for each site)
+  vector[n] lambda; // eigenvalues of invsqrtD * W * invsqrtD
   
-  { // generate sparse representation for W
-  int counter;
-  counter = 1;
-  // loop over upper triangular part of W to identify neighbor pairs
-    for (i in 1:(n - 1)) {
-      for (j in (i + 1):n) {
+  {
+    // generate sparse representation for W
+    int counter;
+    counter = 1;
+    // loop over upper triangular part of W to identify neighbor pairs
+    for (i in 1 : (n - 1)) {
+      for (j in (i + 1) : n) {
         if (W[i, j] == 1) {
           W_sparse[counter, 1] = i;
           W_sparse[counter, 2] = j;
@@ -290,10 +297,12 @@ transformed data {
       }
     }
   }
-  for (i in 1:n) D_sparse[i] = sum(W[i]);
+  for (i in 1 : n) {
+    D_sparse[i] = sum(W[i]);
+  }
   {
-    vector[n] invsqrtD;  
-    for (i in 1:n) {
+    vector[n] invsqrtD;
+    for (i in 1 : n) {
       invsqrtD[i] = 1 / sqrt(D_sparse[i]);
     }
     lambda = eigenvalues_sym(quad_form(W, diag_matrix(invsqrtD)));
@@ -302,8 +311,8 @@ transformed data {
 parameters {
   vector[p] beta;
   vector[n] phi;
-  real<lower = 0> tau;
-  real<lower = 0, upper = 1> alpha;
+  real<lower=0> tau;
+  real<lower=0, upper=1> alpha;
 }
 model {
   phi ~ sparse_car(tau, alpha, W_sparse, D_sparse, lambda, n, W_n);
@@ -325,32 +334,32 @@ sp_d <- list(n = nrow(X),         # number of observations
              W_n = sum(W) / 2,    # number of neighbor pairs
              W = W)               # adjacency matrix
 
-sp_fit <- stan('stan/car_sparse.stan', data = sp_d, 
-               iter = niter, chains = nchains, verbose = FALSE)
+sp_fit <- cmdstan_model('stan/car_sparse.stan')$sample(
+  data = sp_d,
+  parallel_chains = nchains,
+  iter_sampling = niter, 
+  show_messages = FALSE, 
+  show_exceptions = FALSE
+)
 
-print(sp_fit, pars = c('beta', 'tau', 'alpha', 'lp__'))
+
+print(sp_fit$summary(c('beta', 'tau', 'alpha', 'lp__')))
 ```
 
 ```
-## Inference for Stan model: car_sparse.
-## 4 chains, each with iter=10000; warmup=5000; thin=1; 
-## post-warmup draws per chain=5000, total post-warmup draws=20000.
-## 
-##           mean se_mean   sd   2.5%    25%    50%    75%  97.5% n_eff Rhat
-## beta[1]  -0.01    0.02 0.29  -0.63  -0.15   0.00   0.15   0.57   140 1.03
-## beta[2]   0.27    0.00 0.09   0.09   0.21   0.27   0.34   0.46  4449 1.00
-## tau       1.64    0.01 0.50   0.86   1.29   1.58   1.94   2.79  5808 1.00
-## alpha     0.93    0.00 0.06   0.76   0.91   0.95   0.97   0.99  3169 1.00
-## lp__    782.96    0.10 6.83 768.65 778.50 783.31 787.71 795.26  4418 1.00
-## 
-## Samples were drawn using NUTS(diag_e) at Thu Feb  9 18:26:06 2017.
-## For each parameter, n_eff is a crude measure of effective sample size,
-## and Rhat is the potential scale reduction factor on split chains (at 
-## convergence, Rhat=1).
+## # A tibble: 5 × 10
+##   variable     mean   median     sd    mad      q5     q95  rhat ess_bulk
+##   <chr>       <num>    <num>  <num>  <num>   <num>   <num> <num>    <num>
+## 1 beta[1]   -0.0117  -0.0134 0.263  0.228   -0.436   0.422  1.00     964.
+## 2 beta[2]    0.272    0.273  0.0944 0.0936   0.117   0.426  1.00    9052.
+## 3 tau        1.64     1.58   0.498  0.471    0.952   2.55   1.00   11371.
+## 4 alpha      0.933    0.950  0.0625 0.0418   0.814   0.992  1.00    5830.
+## 5 lp__     783.     783.     6.64   6.55   772.    793.     1.00    9875.
+## # ℹ 1 more variable: ess_tail <num>
 ```
 
 ```r
-traceplot(sp_fit, pars = to_plot)
+mcmc_trace(sp_fit$draws(to_plot))
 ```
 
 ![](README_files/figure-html/fit-sparse-model-1.png)<!-- -->
@@ -361,10 +370,10 @@ The main quantity of interest is the effective number of samples per unit time.
 Sparsity gives us an order of magnitude or so gains, mostly via reductions in run time. 
 
 
-Model     Number of effective samples   Elapsed time (sec)   Effective samples / sec)
--------  ----------------------------  -------------------  -------------------------
-full                         4485.084            488.56955                   9.180032
-sparse                       4418.415             38.52712                 114.683248
+|Model  | Number of effective samples| Elapsed time (sec)| Effective samples / sec)|
+|:------|---------------------------:|------------------:|------------------------:|
+|full   |                    8533.779|           29.82268|                 286.1506|
+|sparse |                    9869.593|            2.10133|                4696.8318|
 
 ### Posterior distribution comparison
 
@@ -374,12 +383,11 @@ In this case, I've used more MCMC iterations than we would typically need in to 
 ![](README_files/figure-html/compare-parameter-estimates-1.png)<!-- -->
 
 
-
-![](README_files/figure-html/unnamed-chunk-1-1.png)<!-- -->
-
 The two approaches give the same answers (more or less, with small differences arising due to MCMC sampling error). 
 
 ## Postscript: sparse IAR specification
+
+2023 update: for a much more comprehensive treatment of IAR models, see Morris, Mitzi, Katherine Wheeler-Martin, Dan Simpson, Stephen J. Mooney, Andrew Gelman, and Charles DiMaggio. "Bayesian hierarchical spatial models: Implementing the Besag York Mollié model in stan." Spatial and spatio-temporal epidemiology 31 (2019): 100301. https://doi.org/10.1016/j.sste.2019.100301
 
 Although the IAR prior for $\phi$ that results from $\alpha = 1$ is improper, it remains popular (Besag, York, and Mollie, 1991). 
 In practice, these models are typically fit with a sum to zero constraints: $\sum_{i\text{ in connected coponent}} \phi_i = 0$ for each connected component of the graph. This allows us to interpret both the overall mean and the component-wise means.
@@ -418,43 +426,43 @@ functions {
   *
   * @return Log probability density of IAR prior up to additive constant
   */
-  real sparse_iar_lpdf(vector phi, real tau,
-    int[,] W_sparse, vector D_sparse, vector lambda, int n, int W_n) {
-      row_vector[n] phit_D; // phi' * D
-      row_vector[n] phit_W; // phi' * W
-      vector[n] ldet_terms;
+  real sparse_iar_lpdf(vector phi, real tau, array[,] int W_sparse,
+                       vector D_sparse, vector lambda, int n, int W_n) {
+    row_vector[n] phit_D; // phi' * D
+    row_vector[n] phit_W; // phi' * W
+    vector[n] ldet_terms;
     
-      phit_D = (phi .* D_sparse)';
-      phit_W = rep_row_vector(0, n);
-      for (i in 1:W_n) {
-        phit_W[W_sparse[i, 1]] = phit_W[W_sparse[i, 1]] + phi[W_sparse[i, 2]];
-        phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
-      }
+    phit_D = (phi .* D_sparse)';
+    phit_W = rep_row_vector(0, n);
+    for (i in 1 : W_n) {
+      phit_W[W_sparse[i, 1]] = phit_W[W_sparse[i, 1]] + phi[W_sparse[i, 2]];
+      phit_W[W_sparse[i, 2]] = phit_W[W_sparse[i, 2]] + phi[W_sparse[i, 1]];
+    }
     
-      return 0.5 * ((n-1) * log(tau)
-                    - tau * (phit_D * phi - (phit_W * phi)));
+    return 0.5 * ((n - 1) * log(tau) - tau * (phit_D * phi - (phit_W * phi)));
   }
 }
 data {
-  int<lower = 1> n;
-  int<lower = 1> p;
+  int<lower=1> n;
+  int<lower=1> p;
   matrix[n, p] X;
-  int<lower = 0> y[n];
+  array[n] int<lower=0> y;
   vector[n] log_offset;
-  matrix<lower = 0, upper = 1>[n, n] W; // adjacency matrix
-  int W_n;                // number of adjacent region pairs
+  matrix<lower=0, upper=1>[n, n] W; // adjacency matrix
+  int W_n; // number of adjacent region pairs
 }
 transformed data {
-  int W_sparse[W_n, 2];   // adjacency pairs
-  vector[n] D_sparse;     // diagonal of D (number of neigbors for each site)
-  vector[n] lambda;       // eigenvalues of invsqrtD * W * invsqrtD
+  array[W_n, 2] int W_sparse; // adjacency pairs
+  vector[n] D_sparse; // diagonal of D (number of neigbors for each site)
+  vector[n] lambda; // eigenvalues of invsqrtD * W * invsqrtD
   
-  { // generate sparse representation for W
-  int counter;
-  counter = 1;
-  // loop over upper triangular part of W to identify neighbor pairs
-    for (i in 1:(n - 1)) {
-      for (j in (i + 1):n) {
+  {
+    // generate sparse representation for W
+    int counter;
+    counter = 1;
+    // loop over upper triangular part of W to identify neighbor pairs
+    for (i in 1 : (n - 1)) {
+      for (j in (i + 1) : n) {
         if (W[i, j] == 1) {
           W_sparse[counter, 1] = i;
           W_sparse[counter, 2] = j;
@@ -463,10 +471,12 @@ transformed data {
       }
     }
   }
-  for (i in 1:n) D_sparse[i] = sum(W[i]);
+  for (i in 1 : n) {
+    D_sparse[i] = sum(W[i]);
+  }
   {
-    vector[n] invsqrtD;  
-    for (i in 1:n) {
+    vector[n] invsqrtD;
+    for (i in 1 : n) {
       invsqrtD[i] = 1 / sqrt(D_sparse[i]);
     }
     lambda = eigenvalues_sym(quad_form(W, diag_matrix(invsqrtD)));
@@ -475,7 +485,7 @@ transformed data {
 parameters {
   vector[p] beta;
   vector[n] phi_unscaled;
-  real<lower = 0> tau;
+  real<lower=0> tau;
 }
 transformed parameters {
   vector[n] phi; // brute force centering
